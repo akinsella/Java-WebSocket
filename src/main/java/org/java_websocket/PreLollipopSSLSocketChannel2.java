@@ -5,8 +5,12 @@
  */
 package org.java_websocket;
 
-import org.java_websocket.WrappedByteChannel;
-
+import javax.net.ssl.SSLEngine;
+import javax.net.ssl.SSLEngineResult;
+import javax.net.ssl.SSLEngineResult.HandshakeStatus;
+import javax.net.ssl.SSLEngineResult.Status;
+import javax.net.ssl.SSLException;
+import javax.net.ssl.SSLSession;
 import java.io.IOException;
 import java.net.Socket;
 import java.net.SocketAddress;
@@ -22,33 +26,36 @@ import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Future;
 
-import javax.net.ssl.SSLEngine;
-import javax.net.ssl.SSLEngineResult;
-import javax.net.ssl.SSLEngineResult.HandshakeStatus;
-import javax.net.ssl.SSLEngineResult.Status;
-import javax.net.ssl.SSLException;
-import javax.net.ssl.SSLSession;
-
 /**
  * Implements the relevant portions of the SocketChannel interface with the SSLEngine wrapper.
  */
 public class PreLollipopSSLSocketChannel2 implements ByteChannel, WrappedByteChannel {
-    protected static ByteBuffer emptybuffer = ByteBuffer.allocate( 0 );
+    protected static ByteBuffer emptybuffer = ByteBuffer.allocate(0);
 
     protected ExecutorService exec;
 
     protected List<Future<?>> tasks;
 
-    /** raw payload incomming */
+    /**
+     * raw payload incomming
+     */
     protected ByteBuffer inData;
-    /** encrypted data outgoing */
+    /**
+     * encrypted data outgoing
+     */
     protected ByteBuffer outCrypt;
-    /** encrypted data incoming */
+    /**
+     * encrypted data incoming
+     */
     protected ByteBuffer inCrypt;
 
-    /** the underlying channel */
+    /**
+     * the underlying channel
+     */
     protected SocketChannel socketChannel;
-    /** used to set interestOP SelectionKey.OP_WRITE for the underlying channel */
+    /**
+     * used to set interestOP SelectionKey.OP_WRITE for the underlying channel
+     */
     protected SelectionKey selectionKey;
 
 
@@ -59,88 +66,88 @@ public class PreLollipopSSLSocketChannel2 implements ByteChannel, WrappedByteCha
     private Status engineStatus = Status.BUFFER_UNDERFLOW;
 
     public PreLollipopSSLSocketChannel2(SocketChannel channel, SSLEngine sslEngine, ExecutorService exec, SelectionKey key) throws IOException {
-        if( channel == null || sslEngine == null || exec == null )
-            throw new IllegalArgumentException( "parameter must not be null" );
+        if (channel == null || sslEngine == null || exec == null)
+            throw new IllegalArgumentException("parameter must not be null");
 
         this.socketChannel = channel;
         this.sslEngine = sslEngine;
         this.exec = exec;
 
-        tasks = new ArrayList<Future<?>>( 3 );
-        if( key != null ) {
-            key.interestOps( key.interestOps() | SelectionKey.OP_WRITE );
+        tasks = new ArrayList<Future<?>>(3);
+        if (key != null) {
+            key.interestOps(key.interestOps() | SelectionKey.OP_WRITE);
             this.selectionKey = key;
         }
-        createBuffers( sslEngine.getSession() );
+        createBuffers(sslEngine.getSession());
         // kick off handshake
-        socketChannel.write( wrap( emptybuffer ) );// initializes res
+        socketChannel.write(wrap(emptybuffer));// initializes res
         processHandshake();
     }
 
-    private void consumeFutureUninterruptible( Future<?> f ) {
+    private void consumeFutureUninterruptible(Future<?> f) {
         try {
             boolean interrupted = false;
-            while ( true ) {
+            while (true) {
                 try {
                     f.get();
                     break;
-                } catch ( InterruptedException e ) {
+                } catch (InterruptedException e) {
                     interrupted = true;
                 }
             }
-            if( interrupted )
+            if (interrupted)
                 Thread.currentThread().interrupt();
-        } catch ( ExecutionException e ) {
-            throw new RuntimeException( e );
+        } catch (ExecutionException e) {
+            throw new RuntimeException(e);
         }
     }
 
     private synchronized void processHandshake() throws IOException {
-        if( engineResult.getHandshakeStatus() == HandshakeStatus.NOT_HANDSHAKING )
+        if (engineResult.getHandshakeStatus() == HandshakeStatus.NOT_HANDSHAKING)
             return; // since this may be called either from a reading or a writing thread and because this method is synchronized it is necessary to double check if we are still handshaking.
-        if( !tasks.isEmpty() ) {
+        if (!tasks.isEmpty()) {
             Iterator<Future<?>> it = tasks.iterator();
-            while ( it.hasNext() ) {
+            while (it.hasNext()) {
                 Future<?> f = it.next();
-                if( f.isDone() ) {
+                if (f.isDone()) {
                     it.remove();
                 } else {
-                    if( isBlocking() )
-                        consumeFutureUninterruptible( f );
+                    if (isBlocking())
+                        consumeFutureUninterruptible(f);
                     return;
                 }
             }
         }
 
-        if( engineResult.getHandshakeStatus() == SSLEngineResult.HandshakeStatus.NEED_UNWRAP ) {
-            if( !isBlocking() || engineStatus == Status.BUFFER_UNDERFLOW ) {
+        if (engineResult.getHandshakeStatus() == SSLEngineResult.HandshakeStatus.NEED_UNWRAP) {
+            if (!isBlocking() || engineStatus == Status.BUFFER_UNDERFLOW) {
                 inCrypt.compact();
-                int read = socketChannel.read( inCrypt );
-                if( read == -1 ) {
-                    throw new IOException( "connection closed unexpectedly by peer" );
+                int read = socketChannel.read(inCrypt);
+                if (read == -1) {
+                    throw new IOException("connection closed unexpectedly by peer");
                 }
                 inCrypt.flip();
             }
             inData.compact();
             unwrap();
-            if( engineResult.getHandshakeStatus() == HandshakeStatus.FINISHED ) {
-                createBuffers( sslEngine.getSession() );
+            if (engineResult.getHandshakeStatus() == HandshakeStatus.FINISHED) {
+                createBuffers(sslEngine.getSession());
                 return;
             }
         }
         consumeDelegatedTasks();
-        assert ( engineResult.getHandshakeStatus() != HandshakeStatus.NOT_HANDSHAKING );
-        if( tasks.isEmpty() || engineResult.getHandshakeStatus() == SSLEngineResult.HandshakeStatus.NEED_WRAP ) {
-            socketChannel.write( wrap( emptybuffer ) );
-            if( engineResult.getHandshakeStatus() == HandshakeStatus.FINISHED ) {
-                createBuffers( sslEngine.getSession() );
+        assert (engineResult.getHandshakeStatus() != HandshakeStatus.NOT_HANDSHAKING);
+        if (tasks.isEmpty() || engineResult.getHandshakeStatus() == SSLEngineResult.HandshakeStatus.NEED_WRAP) {
+            socketChannel.write(wrap(emptybuffer));
+            if (engineResult.getHandshakeStatus() == HandshakeStatus.FINISHED) {
+                createBuffers(sslEngine.getSession());
             }
         }
     }
 
-    private synchronized ByteBuffer wrap( ByteBuffer b ) throws SSLException {
+    private synchronized ByteBuffer wrap(ByteBuffer b) throws SSLException {
         outCrypt.compact();
-        engineResult = sslEngine.wrap( b, outCrypt );
+        engineResult = sslEngine.wrap(b, outCrypt);
         outCrypt.flip();
         return outCrypt;
     }
@@ -149,9 +156,10 @@ public class PreLollipopSSLSocketChannel2 implements ByteChannel, WrappedByteCha
         int rem;
         do {
             rem = inData.remaining();
-            engineResult = sslEngine.unwrap( inCrypt, inData );
+            engineResult = sslEngine.unwrap(inCrypt, inData);
             engineStatus = engineResult.getStatus();
-        } while ( engineStatus == SSLEngineResult.Status.OK && ( rem != inData.remaining() || engineResult.getHandshakeStatus() == HandshakeStatus.NEED_UNWRAP ) );
+        }
+        while (engineStatus == SSLEngineResult.Status.OK && (rem != inData.remaining() || engineResult.getHandshakeStatus() == HandshakeStatus.NEED_UNWRAP));
 
         inData.flip();
         return inData;
@@ -159,27 +167,27 @@ public class PreLollipopSSLSocketChannel2 implements ByteChannel, WrappedByteCha
 
     protected void consumeDelegatedTasks() {
         Runnable task;
-        while ( ( task = sslEngine.getDelegatedTask() ) != null ) {
-            tasks.add( exec.submit( task ) );
+        while ((task = sslEngine.getDelegatedTask()) != null) {
+            tasks.add(exec.submit(task));
             // task.run();
         }
     }
 
-    protected void createBuffers( SSLSession session ) {
+    protected void createBuffers(SSLSession session) {
         int appBufferMax = session.getApplicationBufferSize();
         int netBufferMax = session.getPacketBufferSize();
 
-        if( inData == null ) {
-            inData = ByteBuffer.allocate( appBufferMax );
-            outCrypt = ByteBuffer.allocate( netBufferMax );
-            inCrypt = ByteBuffer.allocate( netBufferMax );
+        if (inData == null) {
+            inData = ByteBuffer.allocate(appBufferMax);
+            outCrypt = ByteBuffer.allocate(netBufferMax);
+            inCrypt = ByteBuffer.allocate(netBufferMax);
         } else {
-            if( inData.capacity() != appBufferMax )
-                inData = ByteBuffer.allocate( appBufferMax );
-            if( outCrypt.capacity() != netBufferMax )
-                outCrypt = ByteBuffer.allocate( netBufferMax );
-            if( inCrypt.capacity() != netBufferMax )
-                inCrypt = ByteBuffer.allocate( netBufferMax );
+            if (inData.capacity() != appBufferMax)
+                inData = ByteBuffer.allocate(appBufferMax);
+            if (outCrypt.capacity() != netBufferMax)
+                outCrypt = ByteBuffer.allocate(netBufferMax);
+            if (inCrypt.capacity() != netBufferMax)
+                inCrypt = ByteBuffer.allocate(netBufferMax);
         }
         inData.rewind();
         inData.flip();
@@ -189,12 +197,12 @@ public class PreLollipopSSLSocketChannel2 implements ByteChannel, WrappedByteCha
         outCrypt.flip();
     }
 
-    public int write( ByteBuffer src ) throws IOException {
-        if( !isHandShakeComplete() ) {
+    public int write(ByteBuffer src) throws IOException {
+        if (!isHandShakeComplete()) {
             processHandshake();
             return 0;
         }
-        int num = socketChannel.write( wrap( src ) );
+        int num = socketChannel.write(wrap(src));
         return num;
 
     }
@@ -202,60 +210,60 @@ public class PreLollipopSSLSocketChannel2 implements ByteChannel, WrappedByteCha
     /**
      * Blocks when in blocking mode until at least one byte has been decoded.<br>
      * When not in blocking mode 0 may be returned.
-     **/
-    public int read( ByteBuffer dst ) throws IOException {
-        if( !dst.hasRemaining() )
+     */
+    public int read(ByteBuffer dst) throws IOException {
+        if (!dst.hasRemaining())
             return 0;
-        if( !isHandShakeComplete() ) {
-            if( isBlocking() ) {
-                while ( !isHandShakeComplete() ) {
+        if (!isHandShakeComplete()) {
+            if (isBlocking()) {
+                while (!isHandShakeComplete()) {
                     processHandshake();
                 }
             } else {
                 processHandshake();
-                if( !isHandShakeComplete() ) {
+                if (!isHandShakeComplete()) {
                     return 0;
                 }
             }
         }
 
-        int purged = readRemaining( dst );
-        if( purged != 0 )
+        int purged = readRemaining(dst);
+        if (purged != 0)
             return purged;
 
-        assert ( inData.position() == 0 );
+        assert (inData.position() == 0);
         inData.clear();
 
-        if( !inCrypt.hasRemaining() )
+        if (!inCrypt.hasRemaining())
             inCrypt.clear();
         else
             inCrypt.compact();
 
-        if( ( isBlocking() && inCrypt.position() == 0 ) || engineStatus == Status.BUFFER_UNDERFLOW )
-            if( socketChannel.read( inCrypt ) == -1 ) {
+        if ((isBlocking() && inCrypt.position() == 0) || engineStatus == Status.BUFFER_UNDERFLOW)
+            if (socketChannel.read(inCrypt) == -1) {
                 return -1;
             }
         inCrypt.flip();
         unwrap();
 
-        int transfered = transfereTo( inData, dst );
-        if( transfered == 0 && isBlocking() ) {
-            return read( dst ); // "transfered" may be 0 when not enough bytes were received or during rehandshaking
+        int transfered = transfereTo(inData, dst);
+        if (transfered == 0 && isBlocking()) {
+            return read(dst); // "transfered" may be 0 when not enough bytes were received or during rehandshaking
         }
         return transfered;
     }
 
-    private int readRemaining( ByteBuffer dst ) throws SSLException {
-        if( inData.hasRemaining() ) {
-            return transfereTo( inData, dst );
+    private int readRemaining(ByteBuffer dst) throws SSLException {
+        if (inData.hasRemaining()) {
+            return transfereTo(inData, dst);
         }
-        if( !inData.hasRemaining() )
+        if (!inData.hasRemaining())
             inData.clear();
         // test if some bytes left from last read (e.g. BUFFER_UNDERFLOW)
-        if( inCrypt.hasRemaining() ) {
+        if (inCrypt.hasRemaining()) {
             unwrap();
-            int amount = transfereTo( inData, dst );
-            if( amount > 0 )
+            int amount = transfereTo(inData, dst);
+            if (amount > 0)
                 return amount;
         }
         return 0;
@@ -268,8 +276,8 @@ public class PreLollipopSSLSocketChannel2 implements ByteChannel, WrappedByteCha
     public void close() throws IOException {
         sslEngine.closeOutbound();
         sslEngine.getSession().invalidate();
-        if( socketChannel.isOpen() )
-            socketChannel.write( wrap( emptybuffer ) );// FIXME what if not all bytes can be written
+        if (socketChannel.isOpen())
+            socketChannel.write(wrap(emptybuffer));// FIXME what if not all bytes can be written
         socketChannel.close();
     }
 
@@ -278,12 +286,12 @@ public class PreLollipopSSLSocketChannel2 implements ByteChannel, WrappedByteCha
         return status == SSLEngineResult.HandshakeStatus.FINISHED || status == SSLEngineResult.HandshakeStatus.NOT_HANDSHAKING;
     }
 
-    public SelectableChannel configureBlocking( boolean b ) throws IOException {
-        return socketChannel.configureBlocking( b );
+    public SelectableChannel configureBlocking(boolean b) throws IOException {
+        return socketChannel.configureBlocking(b);
     }
 
-    public boolean connect( SocketAddress remote ) throws IOException {
-        return socketChannel.connect( remote );
+    public boolean connect(SocketAddress remote) throws IOException {
+        return socketChannel.connect(remote);
     }
 
     public boolean finishConnect() throws IOException {
@@ -310,31 +318,34 @@ public class PreLollipopSSLSocketChannel2 implements ByteChannel, WrappedByteCha
 
     @Override
     public void writeMore() throws IOException {
-        write( outCrypt );
+        write(outCrypt);
     }
 
     @Override
     public boolean isNeedRead() {
-        return inData.hasRemaining() || ( inCrypt.hasRemaining() && engineResult.getStatus() != Status.BUFFER_UNDERFLOW );
+        return inData.hasRemaining() ||
+                (inCrypt.hasRemaining()
+                        && engineResult.getStatus() != Status.BUFFER_UNDERFLOW
+                        && engineResult.getStatus() != Status.CLOSED);
     }
 
     @Override
-    public int readMore( ByteBuffer dst ) throws SSLException {
-        return readRemaining( dst );
+    public int readMore(ByteBuffer dst) throws SSLException {
+        return readRemaining(dst);
     }
 
-    private int transfereTo( ByteBuffer from, ByteBuffer to ) {
+    private int transfereTo(ByteBuffer from, ByteBuffer to) {
         int fremain = from.remaining();
         int toremain = to.remaining();
-        if( fremain > toremain ) {
+        if (fremain > toremain) {
             // FIXME there should be a more efficient transfer method
-            int limit = Math.min( fremain, toremain );
-            for( int i = 0 ; i < limit ; i++ ) {
-                to.put( from.get() );
+            int limit = Math.min(fremain, toremain);
+            for (int i = 0; i < limit; i++) {
+                to.put(from.get());
             }
             return limit;
         } else {
-            to.put( from );
+            to.put(from);
             return fremain;
         }
 
