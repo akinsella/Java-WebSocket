@@ -174,8 +174,8 @@ public class PreLollipopSSLSocketChannel2 implements ByteChannel, WrappedByteCha
     }
 
     protected void createBuffers(SSLSession session) {
-        int appBufferMax = session.getApplicationBufferSize();
         int netBufferMax = session.getPacketBufferSize();
+        int appBufferMax = Math.max(session.getApplicationBufferSize(), netBufferMax);
 
         if (inData == null) {
             inData = ByteBuffer.allocate(appBufferMax);
@@ -202,8 +202,7 @@ public class PreLollipopSSLSocketChannel2 implements ByteChannel, WrappedByteCha
             processHandshake();
             return 0;
         }
-        int num = socketChannel.write(wrap(src));
-        return num;
+        return socketChannel.write(wrap(src));
 
     }
 
@@ -239,7 +238,7 @@ public class PreLollipopSSLSocketChannel2 implements ByteChannel, WrappedByteCha
         else
             inCrypt.compact();
 
-        if ((isBlocking() && inCrypt.position() == 0) || engineStatus == Status.BUFFER_UNDERFLOW)
+        if (isBlocking() || engineStatus == Status.BUFFER_UNDERFLOW)
             if (socketChannel.read(inCrypt) == -1) {
                 return -1;
             }
@@ -279,6 +278,7 @@ public class PreLollipopSSLSocketChannel2 implements ByteChannel, WrappedByteCha
         if (socketChannel.isOpen())
             socketChannel.write(wrap(emptybuffer));// FIXME what if not all bytes can be written
         socketChannel.close();
+        exec.shutdownNow();
     }
 
     private boolean isHandShakeComplete() {

@@ -146,8 +146,8 @@ public class SSLSocketChannel2 implements ByteChannel, WrappedByteChannel {
     }
 
     protected void createBuffers(SSLSession session) {
-        int appBufferMax = session.getApplicationBufferSize();
         int netBufferMax = session.getPacketBufferSize();
+        int appBufferMax = Math.max(session.getApplicationBufferSize(), netBufferMax);
 
         if (inData == null) {
             inData = ByteBuffer.allocate(appBufferMax);
@@ -225,7 +225,7 @@ public class SSLSocketChannel2 implements ByteChannel, WrappedByteChannel {
         else
             inCrypt.compact();
 
-        if ((isBlocking() && inCrypt.position() == 0) || lastReadEngineStatus == Status.BUFFER_UNDERFLOW) {
+        if (isBlocking() || lastReadEngineStatus == Status.BUFFER_UNDERFLOW) {
             int cryptRead = socketChannel.read(inCrypt);
             if (cryptRead == -1) {
                 return -1;
